@@ -8,8 +8,8 @@
       "preview": "vite preview"
    },
    "dependencies": {
-      "vue": "^3.4.0",
-      "@epicgames-ps/lib-pixelstreamingfrontend-ue5.5": "latest"
+      "@epicgames-ps/lib-pixelstreamingfrontend-ue5.5": "^1.2.4",
+      "vue": "^3.4.0"
    },
    "devDependencies": {
       "@vitejs/plugin-vue": "^5.0.0",
