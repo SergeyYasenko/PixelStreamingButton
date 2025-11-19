@@ -24,7 +24,11 @@
 </template>
 
 <script setup>
-import { onMounted, onUnmounted, ref } from "vue";
+import { onMounted, onBeforeUnmount, ref } from "vue";
+import {
+   PixelStreaming,
+   Config,
+} from "@epicgames-ps/lib-pixelstreamingfrontend-ue5.5";
 
 // Список кнопок с названиями
 const buttons = ref([
@@ -37,158 +41,91 @@ const buttons = ref([
    { label: "Благоустройство", value: "7" },
 ]);
 
-// WebSocket соединение для PixelStreaming
-const ws = ref(null);
+// PixelStreaming соединение
+let pixelStreaming = null;
 const isConnected = ref(false);
-const wsUrl = ref("ws://localhost:8888"); // URL вашего PixelStreaming сервера
+const signallingUrl = ref("ws://localhost:80"); // URL вашего PixelStreaming сервера
 
 onMounted(() => {
    // Автоматическое подключение при монтировании компонента
    connectToPixelStreaming();
 });
 
-onUnmounted(() => {
-   disconnectFromPixelStreaming();
+onBeforeUnmount(() => {
+   if (pixelStreaming) {
+      pixelStreaming.disconnect();
+      pixelStreaming = null;
+   }
 });
 
-const connectToPixelStreaming = () => {
+const connectToPixelStreaming = async () => {
    try {
-      if (ws.value && ws.value.readyState === WebSocket.OPEN) {
-         console.log("Уже подключено к PixelStreaming");
+      if (pixelStreaming) {
+         console.log("PixelStreaming уже инициализирован");
          return;
       }
 
-      console.log(`Подключение к PixelStreaming: ${wsUrl.value}`);
-      ws.value = new WebSocket(wsUrl.value);
+      console.log(`Подключение к PixelStreaming: ${signallingUrl.value}`);
 
-      ws.value.onopen = () => {
+      // Создаем минимальную конфигурацию без видео
+      const config = new Config({
+         initialSettings: {
+            ss: signallingUrl.value, // URL сигнального сервера
+            AutoConnect: true, // Автоматически подключаться
+            AutoPlayVideo: false, // Не воспроизводить видео (нам не нужно)
+            StartVideoMuted: true, // Видео без звука
+            LogLevel: "Error", // Минимальное логирование
+         },
+      });
+
+      // Создаем экземпляр PixelStreaming без videoElementParent (нам не нужно видео)
+      pixelStreaming = new PixelStreaming(config);
+
+      // Обработчики событий
+      pixelStreaming.addEventListener("webRtcConnected", () => {
          isConnected.value = true;
          console.log("✓ Подключено к PixelStreaming");
-         console.log("WebSocket URL:", wsUrl.value);
-      };
+      });
 
-      ws.value.onclose = () => {
+      pixelStreaming.addEventListener("webRtcDisconnected", () => {
          isConnected.value = false;
          console.log("✗ Отключено от PixelStreaming");
-      };
+      });
 
-      ws.value.onerror = (error) => {
-         console.error("Ошибка WebSocket:", error);
-         console.error(
-            "Проверьте, что PixelStreaming сервер запущен на:",
-            wsUrl.value
-         );
+      pixelStreaming.addEventListener("playStreamError", () => {
+         console.error("Ошибка воспроизведения стрима");
          isConnected.value = false;
-         alert(
-            `Ошибка подключения к PixelStreaming серверу.\nURL: ${wsUrl.value}\n\nУбедитесь, что сервер запущен и доступен.`
-         );
-      };
+      });
 
-      ws.value.onmessage = (event) => {
-         console.log("Получено сообщение от сервера:", event.data);
-      };
+      // Подключаемся
+      pixelStreaming.connect();
    } catch (error) {
       console.error("Ошибка подключения к PixelStreaming:", error);
       isConnected.value = false;
-   }
-};
-
-const disconnectFromPixelStreaming = () => {
-   if (ws.value) {
-      try {
-         ws.value.close();
-         ws.value = null;
-         isConnected.value = false;
-         console.log("Отключено от PixelStreaming");
-      } catch (error) {
-         console.error("Ошибка при отключении:", error);
-      }
+      alert(
+         `Ошибка подключения к PixelStreaming серверу.\nURL: ${signallingUrl.value}\n\nУбедитесь, что сервер запущен и доступен.`
+      );
    }
 };
 
 const sendMessage = (message) => {
    console.log(`Попытка отправить сообщение: ${message}`);
-   console.log(`Состояние WebSocket:`, ws.value ? ws.value.readyState : "null");
-   console.log(`isConnected:`, isConnected.value);
 
    try {
-      if (ws.value && ws.value.readyState === WebSocket.OPEN) {
-         // PixelStreaming может принимать сообщения в разных форматах
-         // Попробуем несколько вариантов
-
-         // Вариант 1: JSON с ConsoleCommand
-         const payloadJson = JSON.stringify({
-            ConsoleCommand: message,
+      if (pixelStreaming && isConnected.value) {
+         // Отправляем данные через emitUIInteraction (правильный способ для PixelStreaming)
+         // Unreal Engine получит эти данные через UIInteraction событие
+         pixelStreaming.emitUIInteraction({
+            button: message,
+            value: message,
+            command: message,
          });
-
-         // Вариант 2: Просто строка (для некоторых версий PixelStreaming)
-         const payloadString = message;
-
-         // Отправляем JSON формат (стандартный для PixelStreaming)
-         ws.value.send(payloadJson);
-         console.log(`✓ Отправлено сообщение (JSON):`, payloadJson);
-         console.log(`✓ Отправлено сообщение (строка):`, message);
+         console.log(`✓ Отправлено сообщение в Unreal Engine: ${message}`);
       } else {
-         // Если не подключено, пытаемся подключиться
-         console.warn(
-            `WebSocket не подключен. Состояние:`,
-            ws.value ? ws.value.readyState : "не инициализирован"
-         );
-
-         if (!ws.value || ws.value.readyState === WebSocket.CLOSED) {
-            console.log("Попытка подключения...");
+         console.warn(`PixelStreaming не подключен. Сообщение: ${message}`);
+         // Пытаемся подключиться, если еще не подключено
+         if (!pixelStreaming) {
             connectToPixelStreaming();
-
-            // Ждем подключения и пытаемся отправить снова
-            const maxAttempts = 10;
-            let attempts = 0;
-
-            const trySend = setInterval(() => {
-               attempts++;
-
-               if (ws.value && ws.value.readyState === WebSocket.OPEN) {
-                  clearInterval(trySend);
-                  const payloadJson = JSON.stringify({
-                     ConsoleCommand: message,
-                  });
-                  ws.value.send(payloadJson);
-                  console.log(
-                     `✓ Отправлено сообщение (после подключения): ${message}`
-                  );
-               } else if (attempts >= maxAttempts) {
-                  clearInterval(trySend);
-                  console.error(
-                     `Не удалось подключиться за ${maxAttempts} попыток. Сообщение: ${message}`
-                  );
-                  alert(
-                     `Не удалось подключиться к PixelStreaming серверу.\nПроверьте, что сервер запущен на ${wsUrl.value}`
-                  );
-               }
-            }, 200);
-         } else if (ws.value.readyState === WebSocket.CONNECTING) {
-            console.log("WebSocket подключается, ожидание...");
-            // Ждем завершения подключения
-            ws.value.addEventListener(
-               "open",
-               () => {
-                  const payloadJson = JSON.stringify({
-                     ConsoleCommand: message,
-                  });
-                  ws.value.send(payloadJson);
-                  console.log(
-                     `✓ Отправлено сообщение (после ожидания подключения): ${message}`
-                  );
-               },
-               { once: true }
-            );
-         } else {
-            console.error(
-               `WebSocket в неожиданном состоянии:`,
-               ws.value.readyState
-            );
-            alert(
-               `Ошибка подключения к PixelStreaming.\nСостояние: ${ws.value.readyState}\nПроверьте URL: ${wsUrl.value}`
-            );
          }
       }
    } catch (error) {
